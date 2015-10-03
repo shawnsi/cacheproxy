@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"path"
@@ -9,12 +10,13 @@ import (
 	"strings"
 )
 
-// Builds the X-Backends header with a chain of nearest 3 backends on the
-// consistent hash ring.
-func BackendHeader(c *consistent.Consistent, name string) string {
-	backends, _ := c.GetN(name, 3)
-	// Need to shuffle these for reliable distribution of cache objects
-	return strings.Join(backends, ",")
+// Sattolo shuffle
+// https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#Sattolo.27s_algorithm
+func shuffle(list []string) {
+	for i := range list {
+		j := rand.Intn(i + 1)
+		list[i], list[j] = list[j], list[i]
+	}
 }
 
 // Reverse proxy that selects the backend by nearest match to the request URL
@@ -24,6 +26,7 @@ func CacheProxy(c *consistent.Consistent) *httputil.ReverseProxy {
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
 			backends, _ := c.GetN(req.URL.Path, 3)
+			shuffle(backends)
 			req.URL.Host = backends[0]
 			req.Header.Set("X-Backends", strings.Join(backends, ","))
 		},
