@@ -34,23 +34,24 @@ func CacheProxy(c *consistent.Consistent) *httputil.ReverseProxy {
 func CacheProxyManager(c *consistent.Consistent) *http.ServeMux {
 	manager := http.NewServeMux()
 
-	// Returns a list of all current consistent hash ring members
-	manager.HandleFunc("/members", func(w http.ResponseWriter, req *http.Request) {
+	// RESTful interface for cache members
+	// GET /members/
+	// 	  Returns a list of current cache members
+
+	// PUT /members/member[:port]
+	//    Adds "member" as a cache member
+
+	// DELETE /members/member[:port]
+	//    Delets "member" from cache ring
+
+	manager.HandleFunc("/members/", func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == "PUT":
+			c.Add(path.Base(req.URL.Path))
+		case req.Method == "DELETE":
+			c.Remove(path.Base(req.URL.Path))
+		}
 		io.WriteString(w, strings.Join(c.Members(), ","))
-	})
-
-	// Add a consistent hash ring member
-	manager.HandleFunc("/add/", func(w http.ResponseWriter, req *http.Request) {
-		// Path handling could be a bit more robust
-		c.Add(path.Base(req.URL.Path))
-		http.Redirect(w, req, "/members", 302)
-	})
-
-	// Add a consistent hash ring member
-	manager.HandleFunc("/remove/", func(w http.ResponseWriter, req *http.Request) {
-		// Path handling could be a bit more robust
-		c.Remove(path.Base(req.URL.Path))
-		http.Redirect(w, req, "/members", 302)
 	})
 
 	return manager
