@@ -55,14 +55,19 @@ func (c *CacheProxy) Manager() *http.ServeMux {
 	return manager
 }
 
+func (c *CacheProxy) Select(path string) []string {
+	selection, _ := c.backends.GetN(path, 3)
+	shuffle(selection)
+	return selection
+}
+
 // Reverse proxy that selects the backend by nearest match to the request URL
 // on the consistent hash ring.
 func (c *CacheProxy) Proxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			backends, _ := c.backends.GetN(req.URL.Path, 3)
-			shuffle(backends)
+			backends := c.Select(req.URL.Path)
 			req.URL.Host = backends[0]
 			req.Header.Set("X-Backends", strings.Join(backends, ","))
 		},
