@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/rcrowley/go-metrics"
 	"io"
 	"math/rand"
 	"net/http"
@@ -19,15 +20,44 @@ func shuffle(list []string) {
 	}
 }
 
+type MeteredTransport struct {
+	http.Transport
+	cacheproxy *CacheProxy
+}
+
+func (t *MeteredTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	t.cacheproxy.requests.Mark(1)
+	resp, err = t.Transport.RoundTrip(req)
+	switch {
+	case resp.Header.Get("X-Cache") == "HIT":
+		t.cacheproxy.hits.Mark(1)
+	default:
+		t.cacheproxy.misses.Mark(1)
+	}
+	return
+}
+
 type CacheProxy struct {
 	backends *consistent.Consistent
 	manager  *http.ServeMux
 	proxy    *httputil.ReverseProxy
+	registry metrics.Registry
+	hits     metrics.Meter
+	misses   metrics.Meter
+	requests metrics.Meter
 }
 
 func New() *CacheProxy {
 	c := new(CacheProxy)
 	c.backends = consistent.New()
+
+	c.registry = metrics.NewRegistry()
+	c.hits = metrics.NewMeter()
+	c.misses = metrics.NewMeter()
+	c.requests = metrics.NewMeter()
+	c.registry.Register("hits", c.hits)
+	c.registry.Register("misses", c.misses)
+	c.registry.Register("requests", c.requests)
 
 	// RESTful interface for cache members
 	c.manager = http.NewServeMux()
@@ -44,6 +74,11 @@ func New() *CacheProxy {
 		io.WriteString(w, strings.Join(c.backends.Members(), ","))
 	})
 
+	// RESTful interface for metrics
+	c.manager.HandleFunc("/metrics/", func(w http.ResponseWriter, req *http.Request) {
+		metrics.WriteOnce(c.registry, w)
+	})
+
 	// Reverse proxy that selects the backend by nearest match to the request URL
 	// on the consistent hash ring.
 	c.proxy = &httputil.ReverseProxy{
@@ -53,7 +88,7 @@ func New() *CacheProxy {
 			req.URL.Host = backends[0]
 			req.Header.Set("X-Backends", strings.Join(backends, ","))
 		},
-		Transport: &http.Transport{},
+		Transport: &MeteredTransport{cacheproxy: c},
 	}
 
 	return c
