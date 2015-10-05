@@ -20,20 +20,30 @@ func shuffle(list []string) {
 	}
 }
 
+// Embeds http.Transport for use along with metrics registry
 type MeteredTransport struct {
 	http.Transport
 	cacheproxy *CacheProxy
 }
 
+// Shadows http.Transport.RoundTrip method with meter and timer updates
 func (t *MeteredTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	// Mark the request meter
 	t.cacheproxy.requests.Mark(1)
-	resp, err = t.Transport.RoundTrip(req)
+
+	// Time the real transport method
+	t.cacheproxy.timer.Time(func() {
+		resp, err = t.Transport.RoundTrip(req)
+	})
+
+	// Mark the appropriate cache response meter
 	switch {
 	case resp.Header.Get("X-Cache") == "HIT":
 		t.cacheproxy.hits.Mark(1)
 	default:
 		t.cacheproxy.misses.Mark(1)
 	}
+
 	return
 }
 
@@ -45,19 +55,27 @@ type CacheProxy struct {
 	hits     metrics.Meter
 	misses   metrics.Meter
 	requests metrics.Meter
+	timer    metrics.Timer
 }
 
 func New() *CacheProxy {
 	c := new(CacheProxy)
 	c.backends = consistent.New()
 
+	// Metric registry
 	c.registry = metrics.NewRegistry()
+
+	// Meters
 	c.hits = metrics.NewMeter()
 	c.misses = metrics.NewMeter()
 	c.requests = metrics.NewMeter()
 	c.registry.Register("hits", c.hits)
 	c.registry.Register("misses", c.misses)
 	c.registry.Register("requests", c.requests)
+
+	// Backend response timer
+	c.timer = metrics.NewTimer()
+	c.registry.Register("backend", c.timer)
 
 	// RESTful interface for cache members
 	c.manager = http.NewServeMux()
