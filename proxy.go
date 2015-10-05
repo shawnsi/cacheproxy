@@ -21,50 +21,32 @@ func shuffle(list []string) {
 
 type CacheProxy struct {
 	backends *consistent.Consistent
+	manager  *http.ServeMux
+	proxy    *httputil.ReverseProxy
 }
 
 func New() *CacheProxy {
 	c := new(CacheProxy)
 	c.backends = consistent.New()
-	return c
-}
-
-func (c *CacheProxy) Manager() *http.ServeMux {
-	manager := http.NewServeMux()
 
 	// RESTful interface for cache members
-	// GET /members/
-	// 	  Returns a list of current cache members
-
-	// PUT /members/member[:port]
-	//    Adds "member" as a cache member
-
-	// DELETE /members/member[:port]
-	//    Delets "member" from cache ring
-
-	manager.HandleFunc("/members/", func(w http.ResponseWriter, req *http.Request) {
+	c.manager = http.NewServeMux()
+	c.manager.HandleFunc("/members/", func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == "PUT":
+			// Adds "member" as a cache member
 			c.backends.Add(path.Base(req.URL.Path))
 		case req.Method == "DELETE":
+			// Deletes "member" from cache ring
 			c.backends.Remove(path.Base(req.URL.Path))
 		}
+		// Always returns a list of current cache members
 		io.WriteString(w, strings.Join(c.backends.Members(), ","))
 	})
 
-	return manager
-}
-
-func (c *CacheProxy) Select(path string) []string {
-	selection, _ := c.backends.GetN(path, 3)
-	shuffle(selection)
-	return selection
-}
-
-// Reverse proxy that selects the backend by nearest match to the request URL
-// on the consistent hash ring.
-func (c *CacheProxy) Proxy() *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
+	// Reverse proxy that selects the backend by nearest match to the request URL
+	// on the consistent hash ring.
+	c.proxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
 			backends := c.Select(req.URL.Path)
@@ -73,6 +55,14 @@ func (c *CacheProxy) Proxy() *httputil.ReverseProxy {
 		},
 		Transport: &http.Transport{},
 	}
+
+	return c
+}
+
+func (c *CacheProxy) Select(path string) []string {
+	selection, _ := c.backends.GetN(path, 3)
+	shuffle(selection)
+	return selection
 }
 
 func main() {
@@ -86,7 +76,7 @@ func main() {
 	proxy.backends.Add("localhost:9095")
 
 	// Initialize and run manager server in background via goroutine
-	go http.ListenAndServe(":9190", proxy.Manager())
+	go http.ListenAndServe(":9190", proxy.manager)
 
-	http.ListenAndServe(":9090", proxy.Proxy())
+	http.ListenAndServe(":9090", proxy.proxy)
 }
