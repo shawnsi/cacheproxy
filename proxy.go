@@ -19,22 +19,23 @@ func shuffle(list []string) {
 	}
 }
 
-// Reverse proxy that selects the backend by nearest match to the request URL
-// on the consistent hash ring.
-func CacheProxy(c *consistent.Consistent) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
-			backends, _ := c.GetN(req.URL.Path, 3)
-			shuffle(backends)
-			req.URL.Host = backends[0]
-			req.Header.Set("X-Backends", strings.Join(backends, ","))
-		},
-		Transport: &http.Transport{},
-	}
+type CacheProxyManager struct {
+	consistent *consistent.Consistent
+	memberChan chan chan []string
 }
 
-func CacheProxyManager(c *consistent.Consistent) *http.ServeMux {
+func New() *CacheProxyManager {
+	c := new(CacheProxyManager)
+	c.consistent = consistent.New()
+
+	return c
+}
+
+func (c *CacheProxyManager) Add(name string) {
+	c.consistent.Add(name)
+}
+
+func (c *CacheProxyManager) Manager() *http.ServeMux {
 	manager := http.NewServeMux()
 
 	// RESTful interface for cache members
@@ -50,9 +51,9 @@ func CacheProxyManager(c *consistent.Consistent) *http.ServeMux {
 	manager.HandleFunc("/members/", func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.Method == "PUT":
-			c.Add(path.Base(req.URL.Path))
+			c.consistent.Add(path.Base(req.URL.Path))
 		case req.Method == "DELETE":
-			c.Remove(path.Base(req.URL.Path))
+			c.consistent.Remove(path.Base(req.URL.Path))
 		}
 		io.WriteString(w, strings.Join(c.Members(), ","))
 	})
@@ -60,20 +61,46 @@ func CacheProxyManager(c *consistent.Consistent) *http.ServeMux {
 	return manager
 }
 
+func (c *CacheProxyManager) Members() []string {
+	resultChan := make(chan []string)
+	go func() {
+		// This is not truly concurrent yet.
+		resultChan <- c.consistent.Members()
+	}()
+	return <-resultChan
+}
+
+// Reverse proxy that selects the backend by nearest match to the request URL
+// on the consistent hash ring.
+func (c *CacheProxyManager) Proxy() *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = "http"
+			backends, _ := c.consistent.GetN(req.URL.Path, 3)
+			shuffle(backends)
+			req.URL.Host = backends[0]
+			req.Header.Set("X-Backends", strings.Join(backends, ","))
+		},
+		Transport: &http.Transport{},
+	}
+}
+
+func (c *CacheProxyManager) Remove(name string) {
+	c.consistent.Remove(name)
+}
+
 func main() {
-	ring := consistent.New()
+	manager := New()
 
 	// Replace with runtime arguments for initialization
-	ring.Add("localhost:9091")
-	ring.Add("localhost:9092")
-	ring.Add("localhost:9093")
-	ring.Add("localhost:9094")
-	ring.Add("localhost:9095")
+	manager.Add("localhost:9091")
+	manager.Add("localhost:9092")
+	manager.Add("localhost:9093")
+	manager.Add("localhost:9094")
+	manager.Add("localhost:9095")
 
 	// Initialize and run manager server in background via goroutine
-	manager := CacheProxyManager(ring)
-	go http.ListenAndServe(":9190", manager)
+	go http.ListenAndServe(":9190", manager.Manager())
 
-	proxy := CacheProxy(ring)
-	http.ListenAndServe(":9090", proxy)
+	http.ListenAndServe(":9090", manager.Proxy())
 }
