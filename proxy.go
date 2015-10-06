@@ -111,13 +111,17 @@ func New() *CacheProxy {
 	return c
 }
 
+// Returns the nearest match and a set of alternates for any HTTP request.
 func (c *CacheProxy) Route(req *http.Request) (string, []string) {
 	var backends []string
 
 	switch {
 	case req.Header.Get("X-Backends") != "":
+		// This needs to sanitize input from potentially untrusted sources
+		// Use preset X-Backends header
 		backends = strings.Split(req.Header.Get("X-Backends"), ",")
 	default:
+		// Generate new array of backends
 		backends, _ = c.backends.GetN(req.URL.Path, 3)
 		shuffle(backends)
 	}
