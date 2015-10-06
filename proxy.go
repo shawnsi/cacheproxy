@@ -28,7 +28,6 @@ type MeteredTransport struct {
 
 // Shadows http.Transport.RoundTrip method with meter and timer updates
 func (t *MeteredTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	// Mark the request meter
 	t.cacheproxy.requests.Mark(1)
 
 	// Time the real transport method
@@ -102,9 +101,9 @@ func New() *CacheProxy {
 	c.proxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			backends := c.Select(req.URL.Path)
-			req.URL.Host = backends[0]
-			req.Header.Set("X-Backends", strings.Join(backends, ","))
+			backend, alternates := c.Route(req)
+			req.URL.Host = backend
+			req.Header.Set("X-Backends", strings.Join(alternates, ","))
 		},
 		Transport: &MeteredTransport{cacheproxy: c},
 	}
@@ -112,10 +111,18 @@ func New() *CacheProxy {
 	return c
 }
 
-func (c *CacheProxy) Select(path string) []string {
-	selection, _ := c.backends.GetN(path, 3)
-	shuffle(selection)
-	return selection
+func (c *CacheProxy) Route(req *http.Request) (string, []string) {
+	var backends []string
+
+	switch {
+	case req.Header.Get("X-Backends") != "":
+		backends = strings.Split(req.Header.Get("X-Backends"), ",")
+	default:
+		backends, _ = c.backends.GetN(req.URL.Path, 3)
+		shuffle(backends)
+	}
+
+	return backends[0], backends[1:]
 }
 
 func main() {
