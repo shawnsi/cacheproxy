@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"github.com/rcrowley/go-metrics"
 	"io"
 	"math/rand"
@@ -10,6 +11,10 @@ import (
 	"stathat.com/c/consistent"
 	"strings"
 )
+
+var managerPort = flag.String("m", "9190", "manager port")
+var proxyPort = flag.String("p", "9090", "proxy port")
+var replicas = flag.Int("r", 3, "cache replica count")
 
 // Sattolo shuffle
 // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#Sattolo.27s_algorithm
@@ -122,7 +127,7 @@ func (c *CacheProxy) Route(req *http.Request) (string, []string) {
 		backends = strings.Split(req.Header.Get("X-Backends"), ",")
 	default:
 		// Generate new array of backends
-		backends, _ = c.backends.GetN(req.URL.Path, 3)
+		backends, _ = c.backends.GetN(req.URL.Path, *replicas)
 		shuffle(backends)
 	}
 
@@ -130,17 +135,17 @@ func (c *CacheProxy) Route(req *http.Request) (string, []string) {
 }
 
 func main() {
+	flag.Parse()
 	proxy := New()
 
-	// Replace with runtime arguments for initialization
-	proxy.backends.Add("localhost:9091")
-	proxy.backends.Add("localhost:9092")
-	proxy.backends.Add("localhost:9093")
-	proxy.backends.Add("localhost:9094")
-	proxy.backends.Add("localhost:9095")
+	// Pass all remaining arguments in as backend
+	backends := flag.Args()
+	for index := range backends {
+		proxy.backends.Add(backends[index])
+	}
 
 	// Initialize and run manager server in background via goroutine
-	go http.ListenAndServe(":9190", proxy.manager)
+	go http.ListenAndServe(":"+*managerPort, proxy.manager)
 
 	http.ListenAndServe(":9090", proxy.proxy)
 }
