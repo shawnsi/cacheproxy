@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"io"
@@ -24,6 +24,7 @@ func shuffle(list []string) {
 
 type CacheProxy struct {
 	backends *consistent.Consistent
+	replicas *int
 	manager  *http.ServeMux
 	proxy    *httputil.ReverseProxy
 	registry metrics.Registry
@@ -33,9 +34,10 @@ type CacheProxy struct {
 	timer    metrics.Timer
 }
 
-func New() *CacheProxy {
+func New(replicas *int) *CacheProxy {
 	c := new(CacheProxy)
 	c.backends = consistent.New()
+	c.replicas = replicas
 
 	// Metric registry
 	c.registry = metrics.NewRegistry()
@@ -90,20 +92,21 @@ func New() *CacheProxy {
 	return c
 }
 
+func (c *CacheProxy) Add(name string) {
+	c.backends.Add(name)
+}
+
 // Returns the nearest match and a set of alternates for any HTTP request.
 func (c *CacheProxy) Route(req *http.Request) (string, []string) {
-	var backends []string
-
-	switch {
-	case req.Header.Get("X-Backends") != "":
-		// This needs to sanitize input from potentially untrusted sources
-		// Use preset X-Backends header
-		backends = strings.Split(req.Header.Get("X-Backends"), ",")
-	default:
-		// Generate new array of backends
-		backends, _ = c.backends.GetN(req.URL.Path, *replicas)
-		shuffle(backends)
-	}
-
+	backends, _ := c.backends.GetN(req.URL.Path, *c.replicas)
+	shuffle(backends)
 	return backends[0], backends[1:]
+}
+
+func (c *CacheProxy) Manage(port *string) {
+	http.ListenAndServe(":"+*port, c.manager)
+}
+
+func (c *CacheProxy) Serve(port *string) {
+	http.ListenAndServe(":"+*port, c.proxy)
 }
