@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"io"
+	"io/ioutil"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
@@ -16,6 +18,7 @@ import (
 var managerPort = flag.String("m", "9190", "manager port")
 var proxyPort = flag.String("p", "9090", "proxy port")
 var replicas = flag.Int("r", 3, "cache replica count")
+var verbose = flag.Bool("v", false, "verbose mode")
 
 // Sattolo shuffle
 // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#Sattolo.27s_algorithm
@@ -85,13 +88,16 @@ func New() *CacheProxy {
 	// RESTful interface for cache members
 	c.manager = http.NewServeMux()
 	c.manager.HandleFunc("/members/", func(w http.ResponseWriter, req *http.Request) {
+		backend := path.Base(req.URL.Path)
 		switch {
 		case req.Method == "PUT":
 			// Adds "member" as a cache member
-			c.backends.Add(path.Base(req.URL.Path))
+			log.Println("Adding backend: " + backend)
+			c.backends.Add(backend)
 		case req.Method == "DELETE":
 			// Deletes "member" from cache ring
-			c.backends.Remove(path.Base(req.URL.Path))
+			log.Println("Removing backend: " + backend)
+			c.backends.Remove(backend)
 		}
 		// Always returns a list of current cache members
 		io.WriteString(w, strings.Join(c.backends.Members(), ","))
@@ -139,14 +145,22 @@ func main() {
 	flag.Parse()
 	proxy := New()
 
+	// Only log to console if verbose flag is used
+	if !*verbose {
+		log.SetOutput(ioutil.Discard)
+	}
+
 	// Pass all remaining arguments in as backend
 	backends := flag.Args()
 	for index := range backends {
+		log.Println("Adding backend: " + backends[index])
 		proxy.backends.Add(backends[index])
 	}
 
 	// Initialize and run manager server in background via goroutine
+	log.Println("Starting proxy manager service on port: " + *managerPort)
 	go http.ListenAndServe(":"+*managerPort, proxy.manager)
 
+	log.Println("Starting proxy service on port: " + *proxyPort)
 	http.ListenAndServe(":9090", proxy.proxy)
 }
