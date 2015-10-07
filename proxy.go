@@ -1,9 +1,7 @@
 package main
 
 import (
-	"flag"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -15,11 +13,6 @@ import (
 	"stathat.com/c/consistent"
 )
 
-var managerPort = flag.String("m", "9190", "manager port")
-var proxyPort = flag.String("p", "9090", "proxy port")
-var replicas = flag.Int("r", 3, "cache replica count")
-var verbose = flag.Bool("v", false, "verbose mode")
-
 // Sattolo shuffle
 // https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#Sattolo.27s_algorithm
 func shuffle(list []string) {
@@ -27,32 +20,6 @@ func shuffle(list []string) {
 		j := rand.Intn(i + 1)
 		list[i], list[j] = list[j], list[i]
 	}
-}
-
-// Embeds http.Transport for use along with metrics registry
-type MeteredTransport struct {
-	http.Transport
-	cacheproxy *CacheProxy
-}
-
-// Shadows http.Transport.RoundTrip method with meter and timer updates
-func (t *MeteredTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	t.cacheproxy.requests.Mark(1)
-
-	// Time the real transport method
-	t.cacheproxy.timer.Time(func() {
-		resp, err = t.Transport.RoundTrip(req)
-	})
-
-	// Mark the appropriate cache response meter
-	switch {
-	case resp.Header.Get("X-Cache") == "HIT":
-		t.cacheproxy.hits.Mark(1)
-	default:
-		t.cacheproxy.misses.Mark(1)
-	}
-
-	return
 }
 
 type CacheProxy struct {
@@ -139,28 +106,4 @@ func (c *CacheProxy) Route(req *http.Request) (string, []string) {
 	}
 
 	return backends[0], backends[1:]
-}
-
-func main() {
-	flag.Parse()
-	proxy := New()
-
-	// Only log to console if verbose flag is used
-	if !*verbose {
-		log.SetOutput(ioutil.Discard)
-	}
-
-	// Pass all remaining arguments in as backend
-	backends := flag.Args()
-	for index := range backends {
-		log.Println("Adding backend: " + backends[index])
-		proxy.backends.Add(backends[index])
-	}
-
-	// Initialize and run manager server in background via goroutine
-	log.Println("Starting proxy manager service on port: " + *managerPort)
-	go http.ListenAndServe(":"+*managerPort, proxy.manager)
-
-	log.Println("Starting proxy service on port: " + *proxyPort)
-	http.ListenAndServe(":9090", proxy.proxy)
 }
