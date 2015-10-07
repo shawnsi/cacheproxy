@@ -25,6 +25,7 @@ func shuffle(list []string) {
 type CacheProxy struct {
 	backends *consistent.Consistent
 	replicas *int
+	router   string
 	manager  *http.ServeMux
 	proxy    *httputil.ReverseProxy
 	registry metrics.Registry
@@ -82,9 +83,8 @@ func New(replicas *int) *CacheProxy {
 	c.proxy = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			backend, alternates := c.Route(req)
-			req.URL.Host = backend
-			req.Header.Set("X-Backends", strings.Join(alternates, ","))
+			req.URL.Host = c.router
+			req.Header.Set("X-Backends", strings.Join(c.Backends(req), ","))
 		},
 		Transport: &MeteredTransport{cacheproxy: c},
 	}
@@ -97,16 +97,17 @@ func (c *CacheProxy) Add(name string) {
 }
 
 // Returns the nearest match and a set of alternates for any HTTP request.
-func (c *CacheProxy) Route(req *http.Request) (string, []string) {
+func (c *CacheProxy) Backends(req *http.Request) []string {
 	backends, _ := c.backends.GetN(req.URL.Path, *c.replicas)
 	shuffle(backends)
-	return backends[0], backends[1:]
+	return backends
 }
 
 func (c *CacheProxy) Manage(port *string) {
 	http.ListenAndServe(":"+*port, c.manager)
 }
 
-func (c *CacheProxy) Serve(port *string) {
+func (c *CacheProxy) Serve(port *string, routerPort *string) {
+	c.router = "localhost:" + *routerPort
 	http.ListenAndServe(":"+*port, c.proxy)
 }

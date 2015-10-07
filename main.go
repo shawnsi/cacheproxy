@@ -38,7 +38,7 @@ func main() {
 
 	// Initialize and run proxy in background via goroutine
 	log.Println("Starting proxy on port: " + *proxyPort)
-	go proxy.Serve(proxyPort)
+	go proxy.Serve(proxyPort, routerPort)
 
 	log.Println("Starting proxy manager on port: " + *managerPort)
 	proxy.Manage(managerPort)
