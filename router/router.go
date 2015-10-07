@@ -18,9 +18,7 @@ func New() *Router {
 	r.router = &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "http"
-			backend, alternates := r.Route(req)
-			req.URL.Host = backend
-			req.Header.Set("X-Backends", strings.Join(alternates, ","))
+			req.URL.Host = r.Route(req)
 		},
 	}
 
@@ -28,10 +26,18 @@ func New() *Router {
 }
 
 // Returns the nearest match and a set of alternates for any HTTP request.
-func (r *Router) Route(req *http.Request) (string, []string) {
+func (r *Router) Route(req *http.Request) string {
 	// Use preset X-Backends header
-	backends := strings.Split(req.Header.Get("X-Backends"), ",")
-	return backends[0], backends[1:]
+	split := strings.SplitN(req.Header.Get("X-Backends"), ",", 2)
+	backend, alternates := split[0], split[1:]
+
+	if len(backend) > 0 {
+		req.Header.Set("X-Backends", strings.Join(alternates, ","))
+		return backend
+	} else {
+		// This is purely for experimentation.  The actually routing should probably be built on vulcand or similar.
+		return req.Header.Get("X-Origin")
+	}
 }
 
 func (r *Router) Serve(port *string) {
