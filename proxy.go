@@ -2,14 +2,15 @@ package main
 
 import (
 	"flag"
-	"github.com/rcrowley/go-metrics"
 	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httputil"
 	"path"
-	"stathat.com/c/consistent"
 	"strings"
+
+	"github.com/rcrowley/go-metrics"
+	"stathat.com/c/consistent"
 )
 
 var managerPort = flag.String("m", "9190", "manager port")
